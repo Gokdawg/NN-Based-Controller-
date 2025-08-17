@@ -1,0 +1,177 @@
+function [Mc,Fc,int_4_norm,est, int_1, int_2, int_3,error, states_r] = fcn(states_dot,states,ref,ref_dot,est_del)
+
+states_r = states(4:6);
+states_r_dot = states_dot(4:6);
+
+error = states_r - ref;
+error_dot = states_r_dot - ref_dot;
+
+theta = 0; % Placeholder angle (pitch) in radians
+phi = 0; 
+
+m_aircraft = 24000;
+l_aircraft = 17.2;
+wingspan = 11.8;
+wing_area = 39.9;
+wing_width = 4.4;
+m_load = 1000;
+r_load = 0.3;
+n = 4;
+wing_mass = 0.12 * m_aircraft;  % this is the combined mass of both wings
+r_fuselage = 1.5;
+wingspan_new = wingspan - r_fuselage *  2;
+m_sym = m_aircraft + n * m_load;
+m_asym = m_aircraft + (n-1) * m_load;
+m_aircraft_prime = m_aircraft - m_load; % KR
+
+I_fuselage_origin = 0.5 * (m_aircraft - wing_mass) * r_fuselage.^2;
+I_wings = 2 * (1/12) * (wing_mass) * (2 * wing_width.^2);
+I_load = n * ((0.5 * m_load * r_load.^2) + (m_load * wing_width.^2));
+I_sym = I_fuselage_origin + I_wings + I_load;
+cg_x_sym = 0;
+cg_y_sym = 0;
+cg_z_sym = 0;
+cg_shift = (m_aircraft * 0 + (n/2)*m_load - (n/2-1)*m_load)/m_asym;
+g = 9.81000;
+
+I_asym = diag([1.5e4, 2.0e4, 2.5e4]); % Diagonal terms (kg·m²)
+I_xx_asym = 1.5e4; 
+I_yy_asym = 2.0e4;
+I_zz_asym = 2.5e4;
+
+I_xz_asym = 0.02 * I_xx_asym; % Small cross-term (2% of I_xx)
+I_yz_asym = 0.02 * I_yy_asym; 
+I_xy_asym = 0.02 * I_zz_asym; 
+
+I_prime = 0; %KR
+
+Zcm = 0.1; 
+Ycm = 0.2;
+Xcm = 0.15;
+
+Fx = 0;
+Fy = 0;
+Fz = 0;
+Fs = [Fx;
+     Fy;
+     Fz];
+
+Ms = [0;0;0];
+Mxs = Ms(1);
+Mys = Ms(2);
+Mzs = Ms(3);
+
+p = states_dot(1);
+q = states_dot(2);
+r = states_dot(3);
+u = states_dot(4);
+v = states_dot(5);
+w = states_dot(6);
+
+M = [
+    1 0 0 0 Zcm -Ycm; 
+    0 1 0 -Zcm 0 Xcm; 
+    0 0 1 Ycm -Xcm 0; 
+    0 -m_asym*Zcm m_asym*Ycm I_xx_asym -I_xy_asym -I_xz_asym; 
+    m_asym*Zcm 0 -m_asym*Xcm -I_xy_asym I_yy_asym -I_yz_asym; 
+    -m_asym*Ycm m_asym*Xcm 0 -I_xz_asym -I_yz_asym I_zz_asym
+    ];
+
+% S_dot = [
+%     u_dot; 
+%     v_dot; 
+%     w_dot; 
+%     p_dot; 
+%     q_dot; 
+%     r_dot
+%     ];
+
+C = [
+    -q*w + r*v + (q.^2 + r.^2)*Xcm - p*q*Ycm - r*p*Zcm;
+    -r*u + p*w + (r.^2 + p.^2)*Ycm - p*q*Xcm - q*r*Zcm;
+    -p*v + q*u + (p.^2 + q.^2)*Zcm - r*p*Xcm - q*r*Ycm;
+    I_xz_asym*p*q + (I_yy_asym-I_zz_asym)*q*r - I_xy_asym*r*p + I_yz_asym*(q.^2-r.^2) + m_sym*(q*u - p*v)*Ycm + m_sym*(r*u-p*w)*Zcm;
+    (-I_yz_asym)*p*q + I_xy_asym*q*r - (I_zz_asym-I_xx_asym)*r*p + I_xz_asym*(r.^2-p.^2) + m_sym*(p*v - q*u)*Xcm + m_sym*(r*v-q*w)*Zcm;
+    (I_xx_asym-I_yy_asym)*p*q - I_xz_asym*q*r - I_yz_asym*r*p + I_xy_asym*(p.^2-q.^2) + m_sym*(p*w - r*u)*Xcm + m_sym*(q*w-r*v)*Ycm
+    ];
+
+% A = [
+%     -g*sin(theta);
+%     g*cos(theta)*sin(phi);
+%     g*cos(theta)*cos(phi);
+%     (-Zcm)*m_sym*g*cos(theta)*sin(phi) + Ycm*m_sym*g*cos(theta)*cos(phi);
+%     (-Zcm)*m_sym*g*sin(theta) - Xcm*m_sym*g*cos(theta)*cos(phi);
+%     Ycm*m_sym*g*sin(theta) + Xcm*m_sym*g*cos(theta)*sin(phi)
+%     ];
+
+A = [0 -m_asym*Zcm m_asym*Ycm; m_asym*Zcm 0 -m_asym*Xcm; -m_asym*Ycm m_asym*Xcm 0];
+
+D = [
+    (1/m_sym) 0 0 0 0 0;
+    0 (1/m_sym) 0 0 0 0;
+    0 0 (1/m_sym) 0 0 0;
+    0 0 0 1 0 0;
+    0 0 0 0 1 0;
+    0 0 0 0 0 1
+    ];
+
+% U = [
+%     Fx;
+%     Fy;
+%     Fz;
+%     Mx;
+%     My;
+%     Mz
+%     ];
+
+% S_dot = inv(M) * (C + A) + inv(M) * D * U;
+
+%F1_t = -q*w + r*v + (q.^2 + r.^2)*Xcm - p*q*Ycm - r*p*Zcm + (1/m_asym)*Fx;
+%F2_t = -r*u + p*w + (r.^2 + p.^2)*Ycm - p*q*Xcm - q*r*Zcm + (1/m_asym)*Fy;
+%F3_t = -p*v + q*u + (p.^2 + q.^2)*Zcm - r*p*Xcm - q*r*Ycm + (1/m_asym)*Fz;
+%F = [F1_t;F2_t;F3_t];
+
+
+F1_t = -q*w + r*v + (q.^2 + r.^2)*Xcm - p*q*Ycm - r*p*Zcm + (1/m_asym)*Fx;
+F2_t = -r*u + p*w + (r.^2 + p.^2)*Ycm - p*q*Xcm - q*r*Zcm + (1/m_asym)*Fy;
+F3_t = -p*v + q*u + (p.^2 + q.^2)*Zcm - r*p*Xcm - q*r*Ycm + (1/m_asym)*Fz;
+F=[F1_t;F2_t;F3_t];
+
+%M1_t = I_xz_asym*p*q + (I_yy_asym-I_zz_asym)*q*r - I_xy_asym*r*p + I_yz_asym*(q.^2-r.^2) + m_asym*(q*u - p*v)*Ycm + m_asym*(r*u-p*w)*Zcm + (-Zcm)*m_asym*g*cos(theta)*sin(phi) + Ycm*m_asym*g*cos(theta)*cos(phi);
+%M2_t = (-I_yz_asym)*p*q + I_xy_asym*q*r - (I_zz_asym-I_xx_asym)*r*p + I_xz_asym*(r.^2-p.^2) + m_asym*(p*v - q*u)*Xcm + m_asym*(r*v-q*w)*Zcm + (-Zcm)*m_asym*g*sin(theta) - Xcm*m_asym*g*cos(theta)*cos(phi);
+%M3_t = (I_xx_asym-I_yy_asym)*p*q - I_xz_asym*q*r - I_yz_asym*r*p + I_xy_asym*(p.^2-q.^2) + m_asym*(p*w - r*u)*Xcm + m_asym*(q*w-r*v)*Ycm + Ycm*m_asym*g*sin(theta) + Xcm*m_asym*g*cos(theta)*sin(phi);
+%Mi = [M1_t; M2_t; M3_t];
+
+M1_t = I_xz_asym*p*q + (I_yy_asym-I_zz_asym)*q*r - I_xy_asym*r*p + I_yz_asym*(q.^2-r.^2) + m_asym*(q*u - p*v)*Ycm + m_asym*(r*u-p*w)*Zcm + (-Zcm)*m_asym*g*cos(theta)*sin(phi) + Ycm*m_asym*g*cos(theta)*cos(phi);
+M2_t = (-I_yz_asym)*p*q + I_xy_asym*q*r + (I_zz_asym-I_xx_asym)*r*p + I_xz_asym*(r.^2-p.^2) + m_asym*(p*v - q*u)*Xcm + m_asym*(r*v-q*w)*Zcm + (-Zcm)*m_asym*g*sin(theta) - Xcm*m_asym*g*cos(theta)*cos(phi);
+M3_t = (I_xx_asym-I_yy_asym)*p*q - I_xz_asym*q*r - I_yz_asym*r*p + I_xy_asym*(p.^2-q.^2) + m_asym*(p*w - r*u)*Xcm + m_asym*(q*w-r*v)*Ycm + Ycm*m_asym*g*sin(theta) + Xcm*m_asym*g*cos(theta)*sin(phi);
+Mi = [M1_t; M2_t; M3_t];
+
+
+
+int_1 = -A*(F);          % KR
+int_2 = -A*(Fs)/m_asym; % KR
+int_3 = Mi + Ms; % KR
+int_4 = ((1/m_asym)*(A^2)) + I_asym; % KR
+
+fs = inv(int_4) * (int_1 + int_2 + int_3); %KR
+
+gs = (((A^2/m_asym) + I_asym)); %KR Does Myc and Mzc also have to be included in the function definition above?
+
+int_4_norm = norm(int_4,2);
+gs_norm = norm(gs,2);
+
+K = diag([10;10;10]);
+
+u_bar_ff = -inv(gs)*(fs);
+
+u_bar_est = inv(gs)*(est_del);
+
+u_bar_fb = -inv(gs)*(K*error);
+
+u_bar = inv(gs)*(-fs - est_del - (K*error));  
+
+Fc = [0;0;0];
+Mc = u_bar;
+
+est = states_r_dot - fs - ((gs)*u_bar);
